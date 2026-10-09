@@ -1,14 +1,14 @@
 {
   "name": "vercel-web-proxy",
   "version": "1.0.0",
-  "description": "Vercel serverless web proxy with URL rewriting and preloaded quick-links",
+  "description": "Vercel edge web proxy with Ultraviolet and custom media engine",
   "main": "api/proxy.js",
   "scripts": {
+    "build": "echo Build ready",
     "dev": "vercel dev",
     "start": "node api/proxy.js"
   },
   "dependencies": {
-    "@titaniumnetwork-dev/ultraviolet": "^3.2.10",
     "node-fetch": "^2.7.0"
   }
 }

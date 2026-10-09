@@ -1,14 +1,11 @@
 {
   "version": 2,
   "regions": ["sfo1", "fra1"],
+  "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/api/proxy",
-      "destination": "/api/proxy.js"
-    },
-    {
-      "source": "/service/:path*",
-      "destination": "/api/proxy.js"
+      "source": "/service/:match*",
+      "destination": "/api/proxy"
     }
   ]
 }
