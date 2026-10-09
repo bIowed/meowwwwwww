@@ -1,9 +1,24 @@
 // language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel (iad1 - Virginia)
-const fetch = require('node-fetch');
+const fetch = globalThis.fetch || require('node-fetch');
 const { URL } = require('url');
 
 /**
- * Extracts the true target URL from any query parameter or fallback route
+ * Extracts cookies from request header
+ */
+function parseCookies(req) {
+  const list = {};
+  const rc = req.headers.cookie;
+  if (rc) {
+    rc.split(';').forEach(cookie => {
+      const parts = cookie.split('=');
+      list[parts.shift().trim()] = decodeURIComponent(parts.join('='));
+    });
+  }
+  return list;
+}
+
+/**
+ * Extracts target URL using query parameters, base64, or the __proxy_target session cookie
  */
 function extractTargetUrl(req) {
   const fullUrl = req.url || '';
@@ -26,11 +41,26 @@ function extractTargetUrl(req) {
     }
   }
 
-  if (req.query.url) {
+  if (req.query && req.query.url) {
     return req.query.url;
   }
 
-  // 3. Fallback path handling when sub-assets hit the bare domain
+  // 3. Cookie-based target resolution (catches /css, /js, /search without query string)
+  const cookies = parseCookies(req);
+  if (cookies.__proxy_target) {
+    try {
+      const baseOrigin = cookies.__proxy_target;
+      let pathPart = fullUrl;
+      // Strip internal fallback_path query if added by vercel.json
+      if (req.query && req.query.fallback_path) {
+        pathPart = req.query.fallback_path;
+        if (!pathPart.startsWith('/')) pathPart = '/' + pathPart;
+      }
+      return new URL(pathPart, baseOrigin).toString();
+    } catch (e) {}
+  }
+
+  // 4. Fallback to Referer header if available
   const referer = req.headers.referer || '';
   if (referer.includes('url=')) {
     const refMatch = referer.match(/url=([^&]+)/);
@@ -48,9 +78,6 @@ function extractTargetUrl(req) {
   return '';
 }
 
-/**
- * Resolves a relative URL against a base URL
- */
 function resolveToAbsolute(val, baseOrigin) {
   try {
     if (!val) return val;
@@ -63,14 +90,14 @@ function resolveToAbsolute(val, baseOrigin) {
 }
 
 /**
- * Deep rewrite of HTML attributes, inline styles, and srcset
+ * Rewrites HTML tags and attributes
  */
 function rewriteHtml(html, targetOrigin, proxyHost) {
   const proxyBase = `https://${proxyHost}/api/proxy?url=`;
 
   let out = html;
 
-  // Rewrite standard DOM attributes (href, src, action, poster, data-src, etc.)
+  // Rewrite standard DOM attributes
   out = out.replace(
     /(href|src|action|poster|data-src|data-video|data-href)=["']([^"']+)["']/gi,
     (match, attr, val) => {
@@ -116,7 +143,7 @@ function rewriteHtml(html, targetOrigin, proxyHost) {
 }
 
 /**
- * Rewrites CSS stylesheets (@import and url() references)
+ * Rewrites external CSS files
  */
 function rewriteCss(css, targetOrigin, proxyHost) {
   const proxyBase = `https://${proxyHost}/api/proxy?url=`;
@@ -132,7 +159,7 @@ function rewriteCss(css, targetOrigin, proxyHost) {
 }
 
 /**
- * Injects client-side hooks, top-level window spoofing, and automatic link proxying
+ * Injects DOM property hooks and frame neutralizers
  */
 function injectClientHooks(html, finalTargetUrl, proxyHost) {
   const targetObj = new URL(finalTargetUrl);
@@ -145,13 +172,13 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
       const TARGET_ORIGIN = "${targetObj.origin}";
       const CURRENT_PAGE = "${finalTargetUrl}";
 
-      // 1. Bypass Frame-Busters (Pornhub, XNXX, Cloudflare top-level window checks)
+      // 1. Break frame busters
       try {
         Object.defineProperty(window, 'top', { get: function() { return window.self; } });
         Object.defineProperty(window, 'parent', { get: function() { return window.self; } });
       } catch(e) {}
 
-      // 2. Wrap arbitrary URLs to route through proxy
+      // 2. Wrap arbitrary URLs
       function proxyWrap(url) {
         if (!url || typeof url !== 'string') return url;
         if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:') || url.startsWith('#')) {
@@ -196,7 +223,7 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         }
       }, true);
 
-      // 5. Intercept Fetch
+      // 5. Intercept Fetch & XHR
       const origFetch = window.fetch;
       window.fetch = function(input, init) {
         if (typeof input === 'string') {
@@ -207,21 +234,10 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         return origFetch.call(this, input, init);
       };
 
-      // 6. Intercept XMLHttpRequest
       const origOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(method, url, ...args) {
         if (url) url = proxyWrap(url);
         return origOpen.call(this, method, url, ...args);
-      };
-
-      // 7. Intercept setAttribute
-      const origSetAttr = Element.prototype.setAttribute;
-      Element.prototype.setAttribute = function(name, val) {
-        const lower = name.toLowerCase();
-        if (['src', 'href', 'action', 'data-src', 'data-video', 'poster'].includes(lower)) {
-          val = proxyWrap(val);
-        }
-        return origSetAttr.call(this, name, val);
       };
     })();
   </script>
@@ -245,7 +261,7 @@ module.exports = async (req, res) => {
 
   let rawTarget = extractTargetUrl(req);
   if (!rawTarget) {
-    return res.status(400).json({ error: 'Missing target URL' });
+    return res.status(400).json({ error: 'Missing target URL or session expired' });
   }
 
   if (!rawTarget.startsWith('http://') && !rawTarget.startsWith('https://')) {
@@ -256,26 +272,27 @@ module.exports = async (req, res) => {
     const targetObj = new URL(rawTarget);
     const proxyHost = req.headers.host || 'localhost';
 
-    const headers = {
+    // Upstream request headers
+    const upstreamHeaders = {
       'User-Agent': req.headers['x-proxy-ua'] || 
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
       'Accept': req.headers.accept || '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': targetObj.origin,
-      'Origin': targetObj.origin
+      'Referer': targetObj.origin + '/'
     };
 
     if (req.headers.range) {
-      headers['Range'] = req.headers.range;
+      upstreamHeaders['Range'] = req.headers.range;
     }
 
+    // Forward cookies if available
     if (req.headers.cookie) {
-      headers['Cookie'] = req.headers.cookie;
+      upstreamHeaders['Cookie'] = req.headers.cookie;
     }
 
     const response = await fetch(targetObj.toString(), {
       method: req.method,
-      headers: headers,
+      headers: upstreamHeaders,
       redirect: 'follow'
     });
 
@@ -283,7 +300,7 @@ module.exports = async (req, res) => {
     const finalOrigin = new URL(finalTargetUrl).origin;
     const contentType = response.headers.get('content-type') || '';
 
-    // Copy response headers EXCEPT length, encoding, and framing restrictions
+    // Strip problematic headers
     const blockedHeaders = [
       'content-length',
       'content-encoding',
@@ -301,11 +318,10 @@ module.exports = async (req, res) => {
       const lower = key.toLowerCase();
       if (!blockedHeaders.includes(lower)) {
         if (lower === 'set-cookie') {
-          // Clean cookie domains to allow cookies to persist on proxy domain
           const cleanedCookie = value
             .replace(/domain=[^;]+;?/gi, '')
-            .replace(/samesite=[^;]+;?/gi, 'SameSite=None;')
-            + '; Secure; Path=/';
+            .replace(/samesite=[^;]+;?/gi, 'SameSite=Lax;')
+            + '; Path=/';
           res.setHeader('Set-Cookie', cleanedCookie);
         } else {
           res.setHeader(key, value);
@@ -315,6 +331,9 @@ module.exports = async (req, res) => {
 
     // Handle HTML
     if (contentType.includes('text/html')) {
+      // Set the active session origin cookie so unrouted relative assets (/css, /img) know their target
+      res.setHeader('Set-Cookie', `__proxy_target=${encodeURIComponent(finalOrigin)}; Path=/; SameSite=Lax`);
+
       let bodyText = await response.text();
       bodyText = rewriteHtml(bodyText, finalOrigin, proxyHost);
       bodyText = injectClientHooks(bodyText, finalTargetUrl, proxyHost);
@@ -328,12 +347,17 @@ module.exports = async (req, res) => {
       res.setHeader('Content-Type', 'text/css; charset=utf-8');
       return res.status(response.status).send(cssText);
     } 
-    // Handle Images, Video streams, and JS bundles
+    // Handle Images, Fonts, JS, and Media Streams
     else {
       res.status(response.status);
-      return response.body.pipe(res);
+      if (response.body && typeof response.body.pipe === 'function') {
+        return response.body.pipe(res);
+      } else {
+        const buffer = await response.arrayBuffer();
+        return res.send(Buffer.from(buffer));
+      }
     }
   } catch (err) {
-    return res.status(500).json({ error: 'Proxy Fetch Failed', message: err.message });
+    return res.status(500).json({ error: 'Proxy request error', details: err.message });
   }
 };
