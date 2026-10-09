@@ -4,7 +4,10 @@ const { URL } = require('url');
 const HlsRewriter = require('../lib/hls_rewriter');
 const CookieJar = require('../lib/cookie_jar');
 const VideoExtractor = require('../lib/extractor');
-const JsVirtualizer = require('../lib/js_virtualizer');
+const DomSandbox = require('../lib/dom_sandbox');
+const EvasionEngine = require('../lib/evasion');
+const { AstRewriter } = require('../lib/ast_parser');
+const MediaEngine = require('../lib/media_engine');
 
 function extractTargetUrl(req) {
   const fullUrl = req.url || '';
@@ -135,11 +138,9 @@ module.exports = async (req, res) => {
     const cookieJar = CookieJar.deserializeFromClientCookie(req);
     cookieJar.set('__target_origin', targetObj.origin);
 
+    const evasionHeaders = EvasionEngine.getEvasionHeaders(targetObj.origin);
     const upstreamHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': req.headers.accept || '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': targetObj.origin + '/',
+      ...evasionHeaders,
       'Cookie': cookieJar.toHeaderString()
     };
 
@@ -163,10 +164,9 @@ module.exports = async (req, res) => {
       cookieJar.addSetCookieHeaders(rawSetCookies, targetObj.origin);
     }
 
-    // Persist Session State to Browser Cookie
     res.setHeader('Set-Cookie', cookieJar.serializeToClientCookie());
 
-    // Copy Upstream Headers (excluding length and security restrictions)
+    // Copy Upstream Headers
     const blockedHeaders = [
       'content-length',
       'content-encoding',
@@ -190,17 +190,35 @@ module.exports = async (req, res) => {
     // 1. Handle HLS Manifests (.m3u8)
     if (contentType.includes('mpegurl') || finalTargetUrl.includes('.m3u8')) {
       const manifestText = await response.text();
-      const rewriter = new HlsRewriter(proxyBase, finalTargetUrl);
-      const rewrittenManifest = rewriter.rewrite(manifestText);
+      const mediaEngine = new MediaEngine(proxyBase, finalTargetUrl);
+      const processed = mediaEngine.processHlsManifest(manifestText);
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-      return res.status(response.status).send(rewrittenManifest);
+      return res.status(response.status).send(processed.content);
     }
 
-    // 2. Handle HTML Webpages
+    // 2. Handle MPEG-DASH Manifests (.mpd)
+    if (contentType.includes('dash+xml') || finalTargetUrl.includes('.mpd')) {
+      const dashXml = await response.text();
+      const mediaEngine = new MediaEngine(proxyBase, finalTargetUrl);
+      const processed = mediaEngine.processDashManifest(dashXml);
+      res.setHeader('Content-Type', 'application/dash+xml; charset=utf-8');
+      return res.status(response.status).send(processed);
+    }
+
+    // 3. Handle JavaScript Assets (Rewrite AST to trap location/cookies)
+    if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
+      const jsCode = await response.text();
+      const astRewriter = new AstRewriter(proxyBase, finalOrigin, finalTargetUrl);
+      const transformedJs = astRewriter.rewrite(jsCode);
+      res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+      return res.status(response.status).send(transformedJs);
+    }
+
+    // 4. Handle HTML Webpages
     if (contentType.includes('text/html')) {
       const bodyText = await response.text();
 
-      // Check if user requested direct Cinema Stream Player mode
+      // Direct Stream Mode
       const isStreamMode = req.query && (req.query.mode === 'stream' || req.query.action === 'extract');
       if (isStreamMode) {
         const streams = VideoExtractor.extract(bodyText, finalTargetUrl);
@@ -211,8 +229,9 @@ module.exports = async (req, res) => {
         }
       }
 
-      // Inject JS Runtime Virtualizer
-      const virtualizerScript = JsVirtualizer.generateScript(proxyBase, finalTargetUrl);
+      // Inject DomSandbox & Evasion Shields
+      const sandboxScript = DomSandbox.generateSandboxScript(proxyBase, finalTargetUrl);
+      const evasionScript = EvasionEngine.generateEvasionScript();
       
       const floatingToolbar = `
       <div id="__vproxy_hud" style="position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;align-items:center;gap:8px;background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.15);padding:8px 14px;border-radius:9999px;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-family:sans-serif;font-size:12px;color:#fff;">
@@ -225,10 +244,12 @@ module.exports = async (req, res) => {
       `;
 
       let finalHtml = bodyText;
+      const injectionBlock = evasionScript + sandboxScript;
+
       if (finalHtml.includes('<head>')) {
-        finalHtml = finalHtml.replace('<head>', `<head>${virtualizerScript}`);
+        finalHtml = finalHtml.replace('<head>', `<head>${injectionBlock}`);
       } else {
-        finalHtml = virtualizerScript + finalHtml;
+        finalHtml = injectionBlock + finalHtml;
       }
 
       if (finalHtml.includes('</body>')) {
@@ -241,7 +262,7 @@ module.exports = async (req, res) => {
       return res.status(response.status).send(finalHtml);
     }
 
-    // 3. Handle Binary Video Chunks, Images, TS segments
+    // 5. Binary Media & Chunks
     res.status(response.status);
     if (response.body && typeof response.body.pipe === 'function') {
       return response.body.pipe(res);
