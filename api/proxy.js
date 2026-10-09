@@ -1,45 +1,15 @@
-// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel
+// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel (sfo1/fra1)
 const fetch = globalThis.fetch || require('node-fetch');
 const { URL } = require('url');
+const HlsRewriter = require('../lib/hls_rewriter');
+const CookieJar = require('../lib/cookie_jar');
+const VideoExtractor = require('../lib/extractor');
+const JsVirtualizer = require('../lib/js_virtualizer');
 
-/**
- * Checks if a URL belongs to a CAPTCHA or security verification provider
- */
-function isCaptchaOrVerificationUrl(url) {
-  if (!url) return false;
-  const lower = url.toLowerCase();
-  return (
-    lower.includes('challenges.cloudflare.com') ||
-    lower.includes('recaptcha') ||
-    lower.includes('gstatic.com/recaptcha') ||
-    lower.includes('hcaptcha.com') ||
-    lower.includes('turnstile') ||
-    lower.includes('cf-challenge')
-  );
-}
-
-/**
- * Extracts cookies from request header
- */
-function parseCookies(req) {
-  const list = {};
-  const rc = req.headers.cookie;
-  if (rc) {
-    rc.split(';').forEach(cookie => {
-      const parts = cookie.split('=');
-      list[parts.shift().trim()] = decodeURIComponent(parts.join('='));
-    });
-  }
-  return list;
-}
-
-/**
- * Extracts target URL using query parameters, base64, or the __proxy_target session cookie
- */
 function extractTargetUrl(req) {
   const fullUrl = req.url || '';
 
-  // 1. Base64 URL mode (?b64url=...)
+  // Base64 (?b64url=...)
   const b64Match = fullUrl.match(/[?&]b64url=([^&]+)/);
   if (b64Match && b64Match[1]) {
     try {
@@ -47,7 +17,7 @@ function extractTargetUrl(req) {
     } catch (e) {}
   }
 
-  // 2. Explicit ?url= parameter
+  // Explicit (?url=...)
   const match = fullUrl.match(/[?&]url=([^&]+.*)/);
   if (match && match[1]) {
     try {
@@ -61,339 +31,81 @@ function extractTargetUrl(req) {
     return req.query.url;
   }
 
-  // 3. Cookie-based target resolution
-  const cookies = parseCookies(req);
-  if (cookies.__proxy_target) {
+  // Session Cookie resolution
+  const cookieJar = CookieJar.deserializeFromClientCookie(req);
+  const sessionTarget = cookieJar.get('__target_origin');
+  if (sessionTarget) {
     try {
-      const baseOrigin = cookies.__proxy_target;
-      let pathPart = fullUrl;
+      let subPath = fullUrl;
       if (req.query && req.query.fallback_path) {
-        pathPart = req.query.fallback_path;
-        if (!pathPart.startsWith('/')) pathPart = '/' + pathPart;
-      }
-      return new URL(pathPart, baseOrigin).toString();
-    } catch (e) {}
-  }
-
-  // 4. Referer header fallback
-  const referer = req.headers.referer || '';
-  if (referer.includes('url=')) {
-    const refMatch = referer.match(/url=([^&]+)/);
-    if (refMatch && refMatch[1]) {
-      try {
-        const parentTarget = decodeURIComponent(refMatch[1]);
-        const parentObj = new URL(parentTarget);
-        let subPath = req.query.fallback_path || fullUrl;
+        subPath = req.query.fallback_path;
         if (!subPath.startsWith('/')) subPath = '/' + subPath;
-        return new URL(subPath, parentObj.origin).toString();
-      } catch (e) {}
-    }
+      }
+      return new URL(subPath, sessionTarget).toString();
+    } catch (e) {}
   }
 
   return '';
 }
 
-function resolveToAbsolute(val, baseOrigin) {
-  try {
-    if (!val) return val;
-    if (val.startsWith('//')) return 'https:' + val;
-    if (val.startsWith('http://') || val.startsWith('https://')) return val;
-    return new URL(val, baseOrigin).toString();
-  } catch (e) {
-    return val;
-  }
-}
+function renderCinemaPlayer(streams, originalPageUrl, proxyHost) {
+  const proxyBase = `https://${proxyHost}/api/proxy?url=`;
+  const primaryStream = streams[0];
+  const proxiedVideoUrl = `${proxyBase}${encodeURIComponent(primaryStream.url)}`;
+  const isHls = primaryStream.type.includes('mpegURL') || primaryStream.url.includes('.m3u8');
 
-/**
- * Attempts to automatically extract raw media/video stream URLs from HTML
- */
-function extractVideoMedia(html, baseOrigin) {
-  let videoUrls = [];
-
-  // 1. XVideos / XNXX patterns
-  const xnxxHigh = html.match(/html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)/);
-  if (xnxxHigh && xnxxHigh[1]) videoUrls.push(xnxxHigh[1]);
-
-  const xnxxLow = html.match(/html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)/);
-  if (xnxxLow && xnxxLow[1]) videoUrls.push(xnxxLow[1]);
-
-  const xnxxHls = html.match(/html5player\.setVideoHLS\(['"]([^'"]+)['"]\)/);
-  if (xnxxHls && xnxxHls[1]) videoUrls.push(xnxxHls[1]);
-
-  // 2. OpenGraph & HTML5 video tags
-  const ogVideo = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i);
-  if (ogVideo && ogVideo[1]) videoUrls.push(ogVideo[1]);
-
-  const videoTagSrc = html.match(/<video[^>]+src=["']([^"']+)["']/i);
-  if (videoTagSrc && videoTagSrc[1]) videoUrls.push(videoTagSrc[1]);
-
-  const sourceTag = html.match(/<source[^>]+src=["']([^"']+)["']/i);
-  if (sourceTag && sourceTag[1]) videoUrls.push(sourceTag[1]);
-
-  // 3. Pornhub / general JSON media definitions
-  const phMatches = [...html.matchAll(/"videoUrl"\s*:\s*"([^"]+)"/g)];
-  for (const m of phMatches) {
-    if (m[1]) videoUrls.push(m[1].replace(/\\\//g, '/'));
-  }
-
-  return videoUrls.map(u => resolveToAbsolute(u, baseOrigin)).filter(Boolean);
-}
-
-/**
- * Renders a native, cinema-mode video stream player that pipes directly through the proxy
- */
-function renderCinemaPlayer(videoSrc, pageUrl, proxyHost) {
-  const proxiedVideo = `https://${proxyHost}/api/proxy?url=${encodeURIComponent(videoSrc)}`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Direct Stream Player</title>
+  <title>Industrial Cinema Stream</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #000; color: #fff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-    .header { background: #0f172a; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
-    .title { font-weight: bold; font-size: 14px; color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
-    .btn-group { display: flex; gap: 10px; }
-    .btn { background: #334155; color: #fff; text-decoration: none; border: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; }
-    .btn-exit { background: #e11d48; }
-    .video-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; }
-    video { width: 100%; height: 100%; max-height: calc(100vh - 55px); outline: none; }
+    body { background: #030712; color: #f9fafb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    .header { background: #111827; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .info { display: flex; align-items: center; gap: 12px; max-width: 65%; }
+    .tag { background: #7c3aed; color: #fff; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; }
+    .title { font-weight: 600; font-size: 14px; color: #e5e7eb; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .actions { display: flex; gap: 10px; align-items: center; }
+    .btn { background: #1f2937; color: #f3f4f6; text-decoration: none; border: 1px solid rgba(255,255,255,0.1); padding: 7px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s ease; }
+    .btn:hover { background: #374151; }
+    .btn-exit { background: #e11d48; border: none; }
+    .btn-exit:hover { background: #be123c; }
+    .player-container { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; position: relative; }
+    video { width: 100%; height: 100%; max-height: calc(100vh - 60px); outline: none; }
   </style>
 </head>
 <body>
   <div class="header">
-    <div class="title">⚡ Streaming: ${pageUrl}</div>
-    <div class="btn-group">
-      <a href="${proxiedVideo}" download="video.mp4" class="btn">⬇ Download Video</a>
-      <a href="/" class="btn btn-exit">Exit</a>
+    <div class="info">
+      <span class="tag">${primaryStream.quality || 'HD'}</span>
+      <span class="title">⚡ Direct Stream: ${originalPageUrl}</span>
+    </div>
+    <div class="actions">
+      <a href="${proxiedVideoUrl}" download="video.mp4" class="btn">⬇ Download Stream</a>
+      <a href="/" class="btn btn-exit">⚡ Exit Player</a>
     </div>
   </div>
-  <div class="video-wrapper">
-    <video controls autoplay playsinline controlslist="nodownload">
-      <source src="${proxiedVideo}" type="video/mp4">
-      Your browser does not support HTML5 video streaming.
-    </video>
+  <div class="player-container">
+    <video id="video-element" controls autoplay playsinline controlslist="nodownload"></video>
   </div>
+  <script>
+    const video = document.getElementById('video-element');
+    const streamSrc = "${proxiedVideoUrl}";
+    const isHls = ${isHls};
+
+    if (isHls && Hls.isSupported()) {
+      const hls = new Hls({ enableWorker: true });
+      hls.loadSource(streamSrc);
+      hls.attachMedia(video);
+    } else {
+      video.src = streamSrc;
+    }
+  </script>
 </body>
 </html>`;
-}
-
-/**
- * Rewrites HTML tags and neutralizes client-side redirection scripts
- */
-function rewriteHtml(html, targetOrigin, proxyHost) {
-  const proxyBase = `https://${proxyHost}/api/proxy?url=`;
-
-  let out = html;
-
-  // 1. Remove meta refresh redirect tags
-  out = out.replace(/<meta[^>]+http-equiv=["']refresh["'][^>]*>/gi, '');
-
-  // 2. Rewrite DOM attributes (href, src, action, poster, data-src, etc.)
-  out = out.replace(
-    /(href|src|action|poster|data-src|data-video|data-href)=["']([^"']+)["']/gi,
-    (match, attr, val) => {
-      if (val.startsWith('data:') || val.startsWith('javascript:') || val.startsWith('#')) {
-        return match;
-      }
-      if (isCaptchaOrVerificationUrl(val)) {
-        return match;
-      }
-      const abs = resolveToAbsolute(val, targetOrigin);
-      return `${attr}="${proxyBase}${encodeURIComponent(abs)}"`;
-    }
-  );
-
-  // 3. Rewrite srcset attributes
-  out = out.replace(
-    /srcset=["']([^"']+)["']/gi,
-    (match, val) => {
-      const parts = val.split(',').map(item => {
-        const trimmed = item.trim();
-        const firstSpace = trimmed.indexOf(' ');
-        if (firstSpace === -1) {
-          if (isCaptchaOrVerificationUrl(trimmed)) return trimmed;
-          const abs = resolveToAbsolute(trimmed, targetOrigin);
-          return `${proxyBase}${encodeURIComponent(abs)}`;
-        }
-        const urlPart = trimmed.substring(0, firstSpace);
-        const descriptor = trimmed.substring(firstSpace);
-        if (isCaptchaOrVerificationUrl(urlPart)) return item;
-        const abs = resolveToAbsolute(urlPart, targetOrigin);
-        return `${proxyBase}${encodeURIComponent(abs)}${descriptor}`;
-      });
-      return `srcset="${parts.join(', ')}"`;
-    }
-  );
-
-  // 4. Rewrite inline CSS url(...)
-  out = out.replace(
-    /url\(['"]?([^'"\)\s]+)['"]?\)/gi,
-    (match, val) => {
-      if (val.startsWith('data:') || val.startsWith('#')) return match;
-      if (isCaptchaOrVerificationUrl(val)) return match;
-      const abs = resolveToAbsolute(val, targetOrigin);
-      return `url("${proxyBase}${encodeURIComponent(abs)}")`;
-    }
-  );
-
-  return out;
-}
-
-/**
- * Rewrites external CSS files
- */
-function rewriteCss(css, targetOrigin, proxyHost) {
-  const proxyBase = `https://${proxyHost}/api/proxy?url=`;
-
-  return css.replace(
-    /url\(['"]?([^'"\)\s]+)['"]?\)/gi,
-    (match, val) => {
-      if (val.startsWith('data:') || val.startsWith('#')) return match;
-      if (isCaptchaOrVerificationUrl(val)) return match;
-      const abs = resolveToAbsolute(val, targetOrigin);
-      return `url("${proxyBase}${encodeURIComponent(abs)}")`;
-    }
-  );
-}
-
-/**
- * Injects DOM property hooks, frame neutralizers, and location hijack blocks
- */
-function injectClientHooks(html, finalTargetUrl, proxyHost) {
-  const targetObj = new URL(finalTargetUrl);
-  const proxyBase = `https://${proxyHost}/api/proxy?url=`;
-
-  const script = `
-  <script>
-    (function() {
-      const PROXY_BASE = "${proxyBase}";
-      const TARGET_ORIGIN = "${targetObj.origin}";
-      const CURRENT_PAGE = "${finalTargetUrl}";
-
-      function isCaptcha(u) {
-        if (!u || typeof u !== 'string') return false;
-        const l = u.toLowerCase();
-        return l.includes('challenges.cloudflare.com') || l.includes('recaptcha') || l.includes('hcaptcha') || l.includes('turnstile');
-      }
-
-      // 1. Break frame-busters and self-checks
-      try {
-        Object.defineProperty(window, 'top', { get: () => window.self });
-        Object.defineProperty(window, 'parent', { get: () => window.self });
-      } catch(e) {}
-
-      // 2. Wrap arbitrary URLs
-      function proxyWrap(url) {
-        if (!url || typeof url !== 'string') return url;
-        if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:') || url.startsWith('#')) {
-          return url;
-        }
-        if (isCaptcha(url)) return url;
-        if (url.startsWith(PROXY_BASE)) return url;
-
-        let absolute = url;
-        if (url.startsWith('//')) {
-          absolute = 'https:' + url;
-        } else if (url.startsWith('/')) {
-          absolute = TARGET_ORIGIN + url;
-        } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
-          try {
-            absolute = new URL(url, CURRENT_PAGE).toString();
-          } catch(e) {
-            absolute = TARGET_ORIGIN + '/' + url;
-          }
-        }
-        return PROXY_BASE + encodeURIComponent(absolute);
-      }
-
-      // 3. Hijack location.replace and location.assign to stop escapes to the real site
-      try {
-        const origReplace = window.location.replace.bind(window.location);
-        window.location.replace = function(u) {
-          origReplace(proxyWrap(u));
-        };
-        const origAssign = window.location.assign.bind(window.location);
-        window.location.assign = function(u) {
-          origAssign(proxyWrap(u));
-        };
-      } catch(e) {}
-
-      // 4. Intercept Click Navigation
-      document.addEventListener('click', function(e) {
-        let el = e.target;
-        while (el && el.tagName !== 'A') {
-          el = el.parentElement;
-        }
-        if (el && el.href) {
-          const rawHref = el.getAttribute('href');
-          if (rawHref && !rawHref.startsWith('#') && !rawHref.startsWith('javascript:') && !isCaptcha(rawHref)) {
-            e.preventDefault();
-            window.location.href = proxyWrap(rawHref);
-          }
-        }
-      }, true);
-
-      // 5. Intercept Form Submissions
-      document.addEventListener('submit', function(e) {
-        if (e.target && e.target.action) {
-          const action = e.target.getAttribute('action') || e.target.action;
-          if (!isCaptcha(action)) {
-            e.target.action = proxyWrap(action);
-          }
-        }
-      }, true);
-
-      // 6. Intercept Fetch & XHR
-      const origFetch = window.fetch;
-      window.fetch = function(input, init) {
-        let u = (typeof input === 'string') ? input : (input instanceof Request ? input.url : '');
-        if (u && !isCaptcha(u)) {
-          if (typeof input === 'string') {
-            input = proxyWrap(input);
-          } else if (input instanceof Request) {
-            input = new Request(proxyWrap(input.url), init);
-          }
-        }
-        return origFetch.call(this, input, init);
-      };
-
-      const origOpen = XMLHttpRequest.prototype.open;
-      XMLHttpRequest.prototype.open = function(method, url, ...args) {
-        if (url && !isCaptcha(url)) {
-          url = proxyWrap(url);
-        }
-        return origOpen.call(this, method, url, ...args);
-      };
-    })();
-  </script>
-  `;
-
-  const floatingToolbar = `
-  <div id="__proxy_floating_bar" style="position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;align-items:center;gap:8px;background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.15);padding:8px 14px;border-radius:9999px;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-family:sans-serif;font-size:12px;color:#fff;">
-    <button onclick="window.history.back()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">◀</button>
-    <button onclick="window.history.forward()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">▶</button>
-    <button onclick="window.location.reload()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">↻</button>
-    <a href="/?mode=stream&url=${encodeURIComponent(finalTargetUrl)}" style="background:#8b5cf6;color:#fff;text-decoration:none;padding:4px 10px;border-radius:6px;font-weight:bold;">🎬 Stream Player</a>
-    <a href="/" style="background:#e11d48;color:#fff;text-decoration:none;padding:4px 10px;border-radius:6px;font-weight:bold;">⚡ Exit</a>
-  </div>
-  `;
-
-  if (html.includes('<head>')) {
-    html = html.replace('<head>', `<head>${script}`);
-  } else {
-    html = script + html;
-  }
-
-  if (html.includes('</body>')) {
-    html = html.replace('</body>', `${floatingToolbar}</body>`);
-  } else {
-    html = html + floatingToolbar;
-  }
-
-  return html;
 }
 
 module.exports = async (req, res) => {
@@ -407,7 +119,7 @@ module.exports = async (req, res) => {
 
   let rawTarget = extractTargetUrl(req);
   if (!rawTarget) {
-    return res.status(400).json({ error: 'Missing target URL or session expired' });
+    return res.status(400).json({ error: 'Target URL missing or expired' });
   }
 
   if (!rawTarget.startsWith('http://') && !rawTarget.startsWith('https://')) {
@@ -417,21 +129,22 @@ module.exports = async (req, res) => {
   try {
     const targetObj = new URL(rawTarget);
     const proxyHost = req.headers.host || 'localhost';
+    const proxyBase = `https://${proxyHost}/api/proxy?url=`;
+
+    // Initialize Virtual Cookie Jar
+    const cookieJar = CookieJar.deserializeFromClientCookie(req);
+    cookieJar.set('__target_origin', targetObj.origin);
 
     const upstreamHeaders = {
-      'User-Agent': req.headers['x-proxy-ua'] || 
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': req.headers.accept || 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept': req.headers.accept || '*/*',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': targetObj.origin + '/'
+      'Referer': targetObj.origin + '/',
+      'Cookie': cookieJar.toHeaderString()
     };
 
     if (req.headers.range) {
       upstreamHeaders['Range'] = req.headers.range;
-    }
-
-    if (req.headers.cookie) {
-      upstreamHeaders['Cookie'] = req.headers.cookie;
     }
 
     const response = await fetch(targetObj.toString(), {
@@ -444,7 +157,16 @@ module.exports = async (req, res) => {
     const finalOrigin = new URL(finalTargetUrl).origin;
     const contentType = response.headers.get('content-type') || '';
 
-    // Strip problematic headers
+    // Update Virtual Cookie Jar with Upstream Set-Cookie
+    const rawSetCookies = response.headers.raw ? response.headers.raw()['set-cookie'] : response.headers.get('set-cookie');
+    if (rawSetCookies) {
+      cookieJar.addSetCookieHeaders(rawSetCookies, targetObj.origin);
+    }
+
+    // Persist Session State to Browser Cookie
+    res.setHeader('Set-Cookie', cookieJar.serializeToClientCookie());
+
+    // Copy Upstream Headers (excluding length and security restrictions)
     const blockedHeaders = [
       'content-length',
       'content-encoding',
@@ -460,59 +182,75 @@ module.exports = async (req, res) => {
 
     response.headers.forEach((value, key) => {
       const lower = key.toLowerCase();
-      if (!blockedHeaders.includes(lower)) {
-        if (lower === 'set-cookie') {
-          const cleanedCookie = value
-            .replace(/domain=[^;]+;?/gi, '')
-            .replace(/samesite=[^;]+;?/gi, 'SameSite=Lax;')
-            + '; Path=/';
-          res.setHeader('Set-Cookie', cleanedCookie);
-        } else {
-          res.setHeader(key, value);
-        }
+      if (!blockedHeaders.includes(lower) && lower !== 'set-cookie') {
+        res.setHeader(key, value);
       }
     });
 
-    // Handle HTML
-    if (contentType.includes('text/html')) {
-      res.setHeader('Set-Cookie', `__proxy_target=${encodeURIComponent(finalOrigin)}; Path=/; SameSite=Lax`);
+    // 1. Handle HLS Manifests (.m3u8)
+    if (contentType.includes('mpegurl') || finalTargetUrl.includes('.m3u8')) {
+      const manifestText = await response.text();
+      const rewriter = new HlsRewriter(proxyBase, finalTargetUrl);
+      const rewrittenManifest = rewriter.rewrite(manifestText);
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+      return res.status(response.status).send(rewrittenManifest);
+    }
 
-      let bodyText = await response.text();
+    // 2. Handle HTML Webpages
+    if (contentType.includes('text/html')) {
+      const bodyText = await response.text();
 
       // Check if user requested direct Cinema Stream Player mode
       const isStreamMode = req.query && (req.query.mode === 'stream' || req.query.action === 'extract');
       if (isStreamMode) {
-        const videos = extractVideoMedia(bodyText, finalOrigin);
-        if (videos.length > 0) {
-          const cinemaHtml = renderCinemaPlayer(videos[0], finalTargetUrl, proxyHost);
+        const streams = VideoExtractor.extract(bodyText, finalTargetUrl);
+        if (streams.length > 0) {
+          const cinemaHtml = renderCinemaPlayer(streams, finalTargetUrl, proxyHost);
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           return res.status(200).send(cinemaHtml);
         }
       }
 
-      bodyText = rewriteHtml(bodyText, finalOrigin, proxyHost);
-      bodyText = injectClientHooks(bodyText, finalTargetUrl, proxyHost);
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      return res.status(response.status).send(bodyText);
-    } 
-    // Handle CSS
-    else if (contentType.includes('text/css')) {
-      let cssText = await response.text();
-      cssText = rewriteCss(cssText, finalOrigin, proxyHost);
-      res.setHeader('Content-Type', 'text/css; charset=utf-8');
-      return res.status(response.status).send(cssText);
-    } 
-    // Handle Video streams, Audio, Images
-    else {
-      res.status(response.status);
-      if (response.body && typeof response.body.pipe === 'function') {
-        return response.body.pipe(res);
+      // Inject JS Runtime Virtualizer
+      const virtualizerScript = JsVirtualizer.generateScript(proxyBase, finalTargetUrl);
+      
+      const floatingToolbar = `
+      <div id="__vproxy_hud" style="position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;align-items:center;gap:8px;background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.15);padding:8px 14px;border-radius:9999px;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-family:sans-serif;font-size:12px;color:#fff;">
+        <button onclick="window.history.back()" style="background:#334155;color:#fff;border:none;padding:5px 9px;border-radius:6px;cursor:pointer;font-weight:bold;">◀</button>
+        <button onclick="window.history.forward()" style="background:#334155;color:#fff;border:none;padding:5px 9px;border-radius:6px;cursor:pointer;font-weight:bold;">▶</button>
+        <button onclick="window.location.reload()" style="background:#334155;color:#fff;border:none;padding:5px 9px;border-radius:6px;cursor:pointer;font-weight:bold;">↻</button>
+        <a href="/?mode=stream&url=${encodeURIComponent(finalTargetUrl)}" style="background:#8b5cf6;color:#fff;text-decoration:none;padding:5px 12px;border-radius:6px;font-weight:bold;">🎬 Stream Video</a>
+        <a href="/" style="background:#e11d48;color:#fff;text-decoration:none;padding:5px 10px;border-radius:6px;font-weight:bold;">⚡ Exit</a>
+      </div>
+      `;
+
+      let finalHtml = bodyText;
+      if (finalHtml.includes('<head>')) {
+        finalHtml = finalHtml.replace('<head>', `<head>${virtualizerScript}`);
       } else {
-        const buffer = await response.arrayBuffer();
-        return res.send(Buffer.from(buffer));
+        finalHtml = virtualizerScript + finalHtml;
       }
+
+      if (finalHtml.includes('</body>')) {
+        finalHtml = finalHtml.replace('</body>', `${floatingToolbar}</body>`);
+      } else {
+        finalHtml = finalHtml + floatingToolbar;
+      }
+
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.status(response.status).send(finalHtml);
     }
+
+    // 3. Handle Binary Video Chunks, Images, TS segments
+    res.status(response.status);
+    if (response.body && typeof response.body.pipe === 'function') {
+      return response.body.pipe(res);
+    } else {
+      const buffer = await response.arrayBuffer();
+      return res.send(Buffer.from(buffer));
+    }
+
   } catch (err) {
-    return res.status(500).json({ error: 'Proxy request error', details: err.message });
+    return res.status(500).json({ error: 'Proxy Engine Failure', details: err.message });
   }
 };
