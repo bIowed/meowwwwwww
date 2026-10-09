@@ -273,7 +273,7 @@
     <div class="logo-group">
       <div class="logo">⚡ Vercel Industrial Proxy</div>
       <div class="region-badge">
-        <span>●</span> iad1 (Northern Virginia)
+        <span>●</span> Global Edge (Geo-Bypass Enabled)
       </div>
     </div>
     <div class="header-actions">
@@ -284,7 +284,7 @@
   <main class="main-container">
     <div class="hero">
       <h1>Ultra Sophisticated Edge Proxy</h1>
-      <p>High-speed Virginia Edge Engine with Base64 Obfuscation & Canvas Stealth Anti-Fingerprinting</p>
+      <p>High-speed Multi-Region Engine with Native CAPTCHA Passthrough & Pornhub Geo-Bypass</p>
     </div>
 
     <div class="proxy-controls-card">
@@ -293,6 +293,13 @@
         <button type="submit">Launch Proxy</button>
       </form>
       <div class="options-row">
+        <div class="option-item">
+          <label for="browse-mode">Launch Mode:</label>
+          <select id="browse-mode">
+            <option value="direct">Direct Top-Window (Best for Pornhub & Captchas)</option>
+            <option value="modal">Embedded Modal</option>
+          </select>
+        </div>
         <div class="option-item">
           <label for="enc-mode">URL Mode:</label>
           <select id="enc-mode">
@@ -406,6 +413,12 @@
         proxyUrl = `/api/proxy?b64url=${encodeURIComponent(b64)}`;
       } else {
         proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+      }
+
+      const browseMode = document.getElementById('browse-mode');
+      if (browseMode && browseMode.value === 'direct') {
+        window.location.href = proxyUrl;
+        return;
       }
 
       viewerUrl.value = url;
