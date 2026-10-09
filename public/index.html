@@ -361,7 +361,9 @@
   <div class="viewer-modal" id="viewer">
     <div class="viewer-bar">
       <button onclick="closeViewer()" class="close-btn">Exit</button>
-      <button onclick="reloadViewer()">↻ Reload</button>
+      <button onclick="goBack()" title="Back">◀</button>
+      <button onclick="goForward()" title="Forward">▶</button>
+      <button onclick="reloadViewer()" title="Reload">↻</button>
       <input type="text" id="viewer-url" placeholder="Navigate URL..." />
       <button onclick="navigateViewer()">Go</button>
       <button onclick="openTab()">New Tab</button>
@@ -436,6 +438,24 @@
         window.open(proxyUrl, '_blank');
       }
     }
+
+    function goBack() {
+      try { iframe.contentWindow.history.back(); } catch(e) {}
+    }
+
+    function goForward() {
+      try { iframe.contentWindow.history.forward(); } catch(e) {}
+    }
+
+    iframe.addEventListener('load', () => {
+      try {
+        const frameHref = iframe.contentWindow.location.href;
+        const match = frameHref.match(/[?&]url=([^&]+)/);
+        if (match && match[1]) {
+          viewerUrl.value = decodeURIComponent(match[1]);
+        }
+      } catch (e) {}
+    });
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
