@@ -8,6 +8,7 @@
     "start": "node api/proxy.js"
   },
   "dependencies": {
+    "@titaniumnetwork-dev/ultraviolet": "^3.2.10",
     "node-fetch": "^2.7.0"
   }
 }

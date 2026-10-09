@@ -8,6 +8,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="/uv/uv.bundle.js"></script>
+  <script src="/uv/uv.config.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -296,8 +298,9 @@
         <div class="option-item">
           <label for="browse-mode">Launch Mode:</label>
           <select id="browse-mode">
-            <option value="direct">Direct Top-Window (Full Site)</option>
+            <option value="uv" selected>⚡ Ultraviolet Engine (Full 30,000-line AST Virtualizer)</option>
             <option value="stream">🎬 Direct Cinema Stream (Zero Ads / Direct Video)</option>
+            <option value="direct">Direct Top-Window (Standard Edge)</option>
             <option value="modal">Embedded Modal</option>
           </select>
         </div>
@@ -417,6 +420,16 @@
       }
 
       const browseMode = document.getElementById('browse-mode');
+      if (browseMode && browseMode.value === 'uv' && window.__uv$config) {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('/sw.js', { scope: __uv$config.prefix }).then(() => {
+            window.location.href = __uv$config.prefix + __uv$config.encodeUrl(url);
+          }).catch(() => {
+            window.location.href = proxyUrl;
+          });
+          return;
+        }
+      }
       if (browseMode && browseMode.value === 'stream') {
         window.location.href = proxyUrl + '&mode=stream';
         return;
