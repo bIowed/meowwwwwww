@@ -6,6 +6,10 @@
       "dest": "/api/proxy.js"
     },
     {
+      "src": "/proxy/(.*)",
+      "dest": "/api/proxy.js?url=$1"
+    },
+    {
       "src": "/(.*)",
       "dest": "/public/$1"
     }
