@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Vercel Industrial Web Proxy</title>
+  <title>Vercel Stealth Edge Proxy (iad1 - Virginia)</title>
+  <link id="favicon" rel="icon" href="https://vercel.com/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: 'Inter', sans-serif;
-      background: #090a0f;
+      background: #07090e;
       color: #f1f5f9;
       min-height: 100vh;
       display: flex;
@@ -26,25 +27,59 @@
       align-items: center;
       justify-content: space-between;
     }
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
     .logo {
-      font-weight: 700;
-      font-size: 1.25rem;
+      font-weight: 800;
+      font-size: 1.35rem;
       background: linear-gradient(135deg, #a855f7, #ec4899, #f43f5e);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
+    }
+    .region-badge {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(74, 222, 128, 0.3);
+      padding: 0.25rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.8rem;
+      font-weight: 600;
       display: flex;
       align-items: center;
-      gap: 0.5rem;
+      gap: 0.4rem;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+    .btn-stealth {
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 0.45rem 0.9rem;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .btn-stealth:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
     }
     .main-container {
       flex: 1;
-      max-width: 1150px;
+      max-width: 1200px;
       margin: 0 auto;
       width: 100%;
-      padding: 3rem 1.5rem;
+      padding: 2.5rem 1.5rem;
       display: flex;
       flex-direction: column;
-      gap: 2.5rem;
+      gap: 2rem;
     }
     .hero {
       text-align: center;
@@ -54,52 +89,85 @@
     }
     .hero h1 {
       font-size: 2.75rem;
-      font-weight: 700;
+      font-weight: 800;
       letter-spacing: -0.03em;
     }
     .hero p {
       color: #94a3b8;
       font-size: 1.1rem;
     }
+    .proxy-controls-card {
+      background: #111827;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.7);
+    }
     .search-box {
       display: flex;
       gap: 0.75rem;
-      background: #1e293b;
-      padding: 0.5rem;
-      border-radius: 14px;
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      box-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.6);
     }
     .search-box input {
       flex: 1;
-      background: transparent;
-      border: none;
-      outline: none;
-      padding: 0.85rem 1.2rem;
+      background: #1f2937;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 0.9rem 1.2rem;
+      border-radius: 12px;
       color: #fff;
       font-size: 1.05rem;
+      outline: none;
+    }
+    .search-box input:focus {
+      border-color: #a855f7;
     }
     .search-box button {
-      background: linear-gradient(135deg, #9333ea, #e11d48);
+      background: linear-gradient(135deg, #a855f7, #e11d48);
       color: #fff;
       border: none;
-      outline: none;
-      padding: 0.85rem 2rem;
-      border-radius: 10px;
-      font-weight: 600;
+      padding: 0.9rem 2.2rem;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 1rem;
       cursor: pointer;
       transition: all 0.2s ease;
     }
     .search-box button:hover {
       opacity: 0.95;
       transform: translateY(-1px);
-      box-shadow: 0 4px 15px rgba(147, 51, 234, 0.4);
+      box-shadow: 0 8px 20px rgba(168, 85, 247, 0.4);
+    }
+    .options-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1.5rem;
+      align-items: center;
+      font-size: 0.875rem;
+      color: #94a3b8;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      padding-top: 1rem;
+    }
+    .option-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .option-item select, .option-item input[type="checkbox"] {
+      background: #1f2937;
+      color: #f1f5f9;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 0.35rem 0.6rem;
+      border-radius: 6px;
+      outline: none;
+      cursor: pointer;
     }
     .section-title {
       font-size: 1.15rem;
-      font-weight: 600;
+      font-weight: 700;
       color: #cbd5e1;
-      margin-bottom: 1.25rem;
+      margin-bottom: 1rem;
       display: flex;
       align-items: center;
       gap: 0.5rem;
@@ -110,7 +178,7 @@
       gap: 1.25rem;
     }
     .card {
-      background: #151d2a;
+      background: #111827;
       border: 1px solid rgba(255, 255, 255, 0.08);
       border-radius: 14px;
       padding: 1.25rem;
@@ -119,8 +187,7 @@
       gap: 0.75rem;
       cursor: pointer;
       transition: all 0.25s ease;
-      text-decoration: none;
-      color: inherit;
+      position: relative;
     }
     .card:hover {
       transform: translateY(-4px);
@@ -131,17 +198,17 @@
       width: 44px;
       height: 44px;
       border-radius: 10px;
-      background: #0f172a;
+      background: #1f2937;
       display: flex;
       align-items: center;
       justify-content: center;
-      font-weight: 700;
+      font-weight: 800;
       font-size: 1.15rem;
       color: #c084fc;
       border: 1px solid rgba(255, 255, 255, 0.05);
     }
     .card-name {
-      font-weight: 600;
+      font-weight: 700;
       font-size: 1.05rem;
     }
     .card-url {
@@ -161,15 +228,15 @@
       padding: 0.75rem 1.5rem;
       display: flex;
       align-items: center;
-      gap: 1rem;
+      gap: 0.75rem;
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     }
     .viewer-bar input {
       flex: 1;
       background: #1e293b;
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(255, 255, 255, 0.12);
       padding: 0.5rem 1rem;
-      border-radius: 6px;
+      border-radius: 8px;
       color: #fff;
       font-size: 0.9rem;
     }
@@ -177,20 +244,21 @@
       background: #334155;
       color: #fff;
       border: none;
-      padding: 0.5rem 1.25rem;
-      border-radius: 6px;
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
       cursor: pointer;
       font-weight: 600;
+      font-size: 0.875rem;
       transition: background 0.2s;
     }
     .viewer-bar button:hover {
       background: #475569;
     }
     .viewer-bar button.close-btn {
-      background: #e11d48;
+      background: #ef4444;
     }
     .viewer-bar button.close-btn:hover {
-      background: #be123c;
+      background: #dc2626;
     }
     iframe {
       flex: 1;
@@ -202,24 +270,49 @@
 </head>
 <body>
   <header>
-    <div class="logo">
-      <span>⚡ Vercel Industrial Proxy Engine</span>
+    <div class="logo-group">
+      <div class="logo">⚡ Vercel Industrial Proxy</div>
+      <div class="region-badge">
+        <span>●</span> iad1 (Northern Virginia)
+      </div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-stealth" onclick="toggleStealthDisguise()">🎭 Stealth Mode (Disguise Tab)</button>
     </div>
   </header>
 
   <main class="main-container">
     <div class="hero">
-      <h1>Advanced Web & Media Proxy</h1>
-      <p>High-performance Edge bypass with base resolution and media streaming</p>
+      <h1>Ultra Sophisticated Edge Proxy</h1>
+      <p>High-speed Virginia Edge Engine with Base64 Obfuscation & Canvas Stealth Anti-Fingerprinting</p>
     </div>
 
-    <form class="search-box" id="proxy-form">
-      <input type="text" id="target-input" placeholder="Enter full URL or website name (e.g. pornhub.com)..." required />
-      <button type="submit">Launch Proxy</button>
-    </form>
+    <div class="proxy-controls-card">
+      <form class="search-box" id="proxy-form">
+        <input type="text" id="target-input" placeholder="Paste URL or search query..." required />
+        <button type="submit">Launch Proxy</button>
+      </form>
+      <div class="options-row">
+        <div class="option-item">
+          <label for="enc-mode">URL Mode:</label>
+          <select id="enc-mode">
+            <option value="raw">Raw URL (/api/proxy?url=...)</option>
+            <option value="b64">Base64 Obfuscated (?b64url=...)</option>
+          </select>
+        </div>
+        <div class="option-item">
+          <label for="ua-select">User Agent:</label>
+          <select id="ua-select">
+            <option value="desktop">Chrome 124 (Windows)</option>
+            <option value="iphone">Safari (iPhone iOS 17)</option>
+            <option value="firefox">Firefox 125 (Linux)</option>
+          </select>
+        </div>
+      </div>
+    </div>
 
     <div>
-      <div class="section-title">⚡ Preloaded Streaming & Social Hubs</div>
+      <div class="section-title">🔥 Preloaded Streams & Hubs</div>
       <div class="grid">
         <div class="card" onclick="launchProxy('https://pornhub.com')">
           <div class="card-icon">PH</div>
@@ -267,7 +360,8 @@
 
   <div class="viewer-modal" id="viewer">
     <div class="viewer-bar">
-      <button onclick="closeViewer()" class="close-btn">Close Viewer</button>
+      <button onclick="closeViewer()" class="close-btn">Exit</button>
+      <button onclick="reloadViewer()">↻ Reload</button>
       <input type="text" id="viewer-url" placeholder="Navigate URL..." />
       <button onclick="navigateViewer()">Go</button>
       <button onclick="openTab()">New Tab</button>
@@ -281,16 +375,44 @@
     const viewer = document.getElementById('viewer');
     const iframe = document.getElementById('proxy-frame');
     const viewerUrl = document.getElementById('viewer-url');
+    const encMode = document.getElementById('enc-mode');
+
+    let stealthActive = false;
+
+    function toggleStealthDisguise() {
+      if (!stealthActive) {
+        document.title = 'Google Docs';
+        document.getElementById('favicon').href = 'https://ssl.gstatic.com/docs/documents/images/kix-favicon7.ico';
+        stealthActive = true;
+        alert('Stealth Mode Enabled: Tab disguised as Google Docs');
+      } else {
+        document.title = 'Vercel Stealth Edge Proxy (iad1 - Virginia)';
+        document.getElementById('favicon').href = 'https://vercel.com/favicon.ico';
+        stealthActive = false;
+      }
+    }
 
     function launchProxy(targetUrl) {
       let url = targetUrl.trim();
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         url = 'https://' + url;
       }
-      const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+      
+      let proxyUrl = '';
+      if (encMode.value === 'b64') {
+        const b64 = btoa(url);
+        proxyUrl = `/api/proxy?b64url=${encodeURIComponent(b64)}`;
+      } else {
+        proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+      }
+
       viewerUrl.value = url;
       iframe.src = proxyUrl;
       viewer.style.display = 'flex';
+    }
+
+    function reloadViewer() {
+      iframe.src = iframe.src;
     }
 
     function navigateViewer() {
@@ -306,7 +428,12 @@
 
     function openTab() {
       if (viewerUrl.value) {
-        window.open(`/api/proxy?url=${encodeURIComponent(viewerUrl.value)}`, '_blank');
+        let url = viewerUrl.value;
+        let proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+        if (encMode.value === 'b64') {
+          proxyUrl = `/api/proxy?b64url=${encodeURIComponent(btoa(url))}`;
+        }
+        window.open(proxyUrl, '_blank');
       }
     }
 

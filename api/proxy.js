@@ -1,12 +1,22 @@
-// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel
+// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel (iad1 - Virginia)
 const fetch = require('node-fetch');
 const { URL } = require('url');
 
 /**
- * Extracts raw target URL from req.url to prevent query string truncation at '&'
+ * Parses target URL supporting raw query strings and Base64 encoded URLs
  */
-function getRawTargetUrl(req) {
+function extractTargetUrl(req) {
   const fullUrl = req.url || '';
+  
+  // Base64 URL support (?b64url=...)
+  const b64Match = fullUrl.match(/[?&]b64url=([^&]+)/);
+  if (b64Match && b64Match[1]) {
+    try {
+      return Buffer.from(decodeURIComponent(b64Match[1]), 'base64').toString('utf-8');
+    } catch (e) {}
+  }
+
+  // Standard raw url parameter
   const match = fullUrl.match(/[?&]url=([^&]+.*)/);
   if (match && match[1]) {
     try {
@@ -18,9 +28,6 @@ function getRawTargetUrl(req) {
   return req.query.url || '';
 }
 
-/**
- * Resolves relative and absolute URLs against the current target origin
- */
 function resolveUrl(relativeOrAbsolute, baseOrigin) {
   try {
     if (relativeOrAbsolute.startsWith('//')) {
@@ -33,20 +40,32 @@ function resolveUrl(relativeOrAbsolute, baseOrigin) {
 }
 
 /**
- * Comprehensive client-side proxy engine injected into HTML responses.
- * Hooks fetch, XHR, DOM attributes, window.location, and cookie access.
+ * Injects stealth browser overrides, fingerprint masking, and client-side proxy hooks
  */
-function injectProxyScript(html, finalTargetUrl, proxyHost) {
+function injectStealthEngine(html, finalTargetUrl, proxyHost) {
   const targetObj = new URL(finalTargetUrl);
   const proxyBase = `https://${proxyHost}/api/proxy?url=`;
 
-  const script = `
+  const stealthScript = `
   <script>
     (function() {
       const PROXY_BASE = "${proxyBase}";
       const TARGET_ORIGIN = "${targetObj.origin}";
       const CURRENT_TARGET = "${finalTargetUrl}";
 
+      // Canvas / WebGL Fingerprint Noise Generator
+      try {
+        const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+        CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
+          const res = origGetImageData.call(this, x, y, w, h);
+          for (let i = 0; i < res.data.length; i += 64) {
+            res.data[i] = res.data[i] ^ 1;
+          }
+          return res;
+        };
+      } catch(e) {}
+
+      // URL Wrapper Utility
       function wrapUrl(url) {
         if (!url || typeof url !== 'string') return url;
         if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:')) return url;
@@ -81,13 +100,11 @@ function injectProxyScript(html, finalTargetUrl, proxyHost) {
       // Hook XHR
       const origOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(method, url, ...args) {
-        if (url) {
-          url = wrapUrl(url);
-        }
+        if (url) url = wrapUrl(url);
         return origOpen.call(this, method, url, ...args);
       };
 
-      // Hook Element.setAttribute
+      // Hook SetAttribute
       const origSetAttribute = Element.prototype.setAttribute;
       Element.prototype.setAttribute = function(name, value) {
         const lower = name.toLowerCase();
@@ -103,37 +120,24 @@ function injectProxyScript(html, finalTargetUrl, proxyHost) {
         if (url) url = wrapUrl(url);
         return origOpenWindow.call(this, url, ...args);
       };
-
-      // Hook beacon
-      if (navigator.sendBeacon) {
-        const origBeacon = navigator.sendBeacon;
-        navigator.sendBeacon = function(url, data) {
-          return origBeacon.call(this, wrapUrl(url), data);
-        };
-      }
     })();
   </script>
   `;
 
-  // Inject <base> tag to auto-resolve unhandled relative resources
   const baseTag = `<base href="${proxyBase}${encodeURIComponent(finalTargetUrl)}">`;
   
   if (html.includes('<head>')) {
-    return html.replace('<head>', `<head>${baseTag}${script}`);
+    return html.replace('<head>', `<head>${baseTag}${stealthScript}`);
   }
-  return baseTag + script + html;
+  return baseTag + stealthScript + html;
 }
 
-/**
- * Rewrites HTML/CSS strings server-side
- */
-function rewriteServerHtml(html, finalTargetUrl, proxyHost) {
+function rewriteServerContent(html, finalTargetUrl, proxyHost) {
   const targetObj = new URL(finalTargetUrl);
   const proxyBase = `https://${proxyHost}/api/proxy?url=`;
 
   let content = html;
 
-  // Rewrite standard attributes
   content = content.replace(
     /(href|src|action|poster|data-src|data-video|data-href)=["']([^"']+)["']/gi,
     (match, attr, val) => {
@@ -143,7 +147,6 @@ function rewriteServerHtml(html, finalTargetUrl, proxyHost) {
     }
   );
 
-  // Rewrite srcset attributes
   content = content.replace(
     /srcset=["']([^"']+)["']/gi,
     (match, val) => {
@@ -157,7 +160,6 @@ function rewriteServerHtml(html, finalTargetUrl, proxyHost) {
     }
   );
 
-  // Rewrite CSS url() calls
   content = content.replace(
     /url\(['"]?([^'"]+)['"]?\)/gi,
     (match, val) => {
@@ -174,12 +176,13 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, HEAD');
   res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('X-Vercel-Proxy-Region', 'iad1-virginia');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  let rawTarget = getRawTargetUrl(req);
+  let rawTarget = extractTargetUrl(req);
   if (!rawTarget) {
     return res.status(400).json({ error: 'Missing target URL parameter' });
   }
@@ -192,11 +195,17 @@ module.exports = async (req, res) => {
     const targetObj = new URL(rawTarget);
     const proxyHost = req.headers.host || 'localhost';
 
+    // User-Agent Spoofing via header or custom preset
+    const userAgent = req.headers['x-proxy-ua'] || 
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36';
+
+    const referer = req.headers['x-proxy-ref'] || targetObj.origin;
+
     const headers = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'User-Agent': userAgent,
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
-      'Referer': targetObj.origin,
+      'Referer': referer,
       'Origin': targetObj.origin
     };
 
@@ -217,7 +226,7 @@ module.exports = async (req, res) => {
     const finalTargetUrl = response.url || targetObj.toString();
     const contentType = response.headers.get('content-type') || '';
 
-    // Pass safe headers back
+    // Strip restrictive headers
     response.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
       if (![
@@ -235,13 +244,13 @@ module.exports = async (req, res) => {
 
     if (contentType.includes('text/html')) {
       let bodyText = await response.text();
-      bodyText = rewriteServerHtml(bodyText, finalTargetUrl, proxyHost);
-      bodyText = injectProxyScript(bodyText, finalTargetUrl, proxyHost);
+      bodyText = rewriteServerContent(bodyText, finalTargetUrl, proxyHost);
+      bodyText = injectStealthEngine(bodyText, finalTargetUrl, proxyHost);
       return res.status(response.status).send(bodyText);
     } 
     else if (contentType.includes('text/css')) {
       const bodyText = await response.text();
-      const modifiedText = rewriteServerHtml(bodyText, finalTargetUrl, proxyHost);
+      const modifiedText = rewriteServerContent(bodyText, finalTargetUrl, proxyHost);
       return res.status(response.status).send(modifiedText);
     } 
     else {
@@ -249,6 +258,6 @@ module.exports = async (req, res) => {
       return response.body.pipe(res);
     }
   } catch (err) {
-    return res.status(500).json({ error: 'Proxy request execution failed', details: err.message });
+    return res.status(500).json({ error: 'Edge Proxy Execution Error', details: err.message });
   }
 };
