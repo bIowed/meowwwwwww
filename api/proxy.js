@@ -1,4 +1,4 @@
-// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel (sfo1/fra1 - Geo-Unblocked)
+// language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel
 const fetch = globalThis.fetch || require('node-fetch');
 const { URL } = require('url');
 
@@ -105,21 +105,99 @@ function resolveToAbsolute(val, baseOrigin) {
 }
 
 /**
- * Rewrites HTML tags and attributes while allowing CAPTCHA providers to load natively
+ * Attempts to automatically extract raw media/video stream URLs from HTML
+ */
+function extractVideoMedia(html, baseOrigin) {
+  let videoUrls = [];
+
+  // 1. XVideos / XNXX patterns
+  const xnxxHigh = html.match(/html5player\.setVideoUrlHigh\(['"]([^'"]+)['"]\)/);
+  if (xnxxHigh && xnxxHigh[1]) videoUrls.push(xnxxHigh[1]);
+
+  const xnxxLow = html.match(/html5player\.setVideoUrlLow\(['"]([^'"]+)['"]\)/);
+  if (xnxxLow && xnxxLow[1]) videoUrls.push(xnxxLow[1]);
+
+  const xnxxHls = html.match(/html5player\.setVideoHLS\(['"]([^'"]+)['"]\)/);
+  if (xnxxHls && xnxxHls[1]) videoUrls.push(xnxxHls[1]);
+
+  // 2. OpenGraph & HTML5 video tags
+  const ogVideo = html.match(/<meta[^>]+property=["']og:video(?::url)?["'][^>]+content=["']([^"']+)["']/i);
+  if (ogVideo && ogVideo[1]) videoUrls.push(ogVideo[1]);
+
+  const videoTagSrc = html.match(/<video[^>]+src=["']([^"']+)["']/i);
+  if (videoTagSrc && videoTagSrc[1]) videoUrls.push(videoTagSrc[1]);
+
+  const sourceTag = html.match(/<source[^>]+src=["']([^"']+)["']/i);
+  if (sourceTag && sourceTag[1]) videoUrls.push(sourceTag[1]);
+
+  // 3. Pornhub / general JSON media definitions
+  const phMatches = [...html.matchAll(/"videoUrl"\s*:\s*"([^"]+)"/g)];
+  for (const m of phMatches) {
+    if (m[1]) videoUrls.push(m[1].replace(/\\\//g, '/'));
+  }
+
+  return videoUrls.map(u => resolveToAbsolute(u, baseOrigin)).filter(Boolean);
+}
+
+/**
+ * Renders a native, cinema-mode video stream player that pipes directly through the proxy
+ */
+function renderCinemaPlayer(videoSrc, pageUrl, proxyHost) {
+  const proxiedVideo = `https://${proxyHost}/api/proxy?url=${encodeURIComponent(videoSrc)}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Direct Stream Player</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #000; color: #fff; font-family: -apple-system, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+    .header { background: #0f172a; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; }
+    .title { font-weight: bold; font-size: 14px; color: #38bdf8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+    .btn-group { display: flex; gap: 10px; }
+    .btn { background: #334155; color: #fff; text-decoration: none; border: none; padding: 6px 14px; border-radius: 6px; font-size: 13px; font-weight: bold; cursor: pointer; }
+    .btn-exit { background: #e11d48; }
+    .video-wrapper { flex: 1; display: flex; align-items: center; justify-content: center; background: #000; }
+    video { width: 100%; height: 100%; max-height: calc(100vh - 55px); outline: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title">⚡ Streaming: ${pageUrl}</div>
+    <div class="btn-group">
+      <a href="${proxiedVideo}" download="video.mp4" class="btn">⬇ Download Video</a>
+      <a href="/" class="btn btn-exit">Exit</a>
+    </div>
+  </div>
+  <div class="video-wrapper">
+    <video controls autoplay playsinline controlslist="nodownload">
+      <source src="${proxiedVideo}" type="video/mp4">
+      Your browser does not support HTML5 video streaming.
+    </video>
+  </div>
+</body>
+</html>`;
+}
+
+/**
+ * Rewrites HTML tags and neutralizes client-side redirection scripts
  */
 function rewriteHtml(html, targetOrigin, proxyHost) {
   const proxyBase = `https://${proxyHost}/api/proxy?url=`;
 
   let out = html;
 
-  // Rewrite standard DOM attributes
+  // 1. Remove meta refresh redirect tags
+  out = out.replace(/<meta[^>]+http-equiv=["']refresh["'][^>]*>/gi, '');
+
+  // 2. Rewrite DOM attributes (href, src, action, poster, data-src, etc.)
   out = out.replace(
     /(href|src|action|poster|data-src|data-video|data-href)=["']([^"']+)["']/gi,
     (match, attr, val) => {
       if (val.startsWith('data:') || val.startsWith('javascript:') || val.startsWith('#')) {
         return match;
       }
-      // Never proxy CAPTCHA scripts/iframes; they must run directly against their providers
       if (isCaptchaOrVerificationUrl(val)) {
         return match;
       }
@@ -128,7 +206,7 @@ function rewriteHtml(html, targetOrigin, proxyHost) {
     }
   );
 
-  // Rewrite srcset attributes
+  // 3. Rewrite srcset attributes
   out = out.replace(
     /srcset=["']([^"']+)["']/gi,
     (match, val) => {
@@ -150,7 +228,7 @@ function rewriteHtml(html, targetOrigin, proxyHost) {
     }
   );
 
-  // Rewrite inline CSS url(...)
+  // 4. Rewrite inline CSS url(...)
   out = out.replace(
     /url\(['"]?([^'"\)\s]+)['"]?\)/gi,
     (match, val) => {
@@ -182,7 +260,7 @@ function rewriteCss(css, targetOrigin, proxyHost) {
 }
 
 /**
- * Injects DOM property hooks, CAPTCHA bypass, and a floating proxy controls toolbar
+ * Injects DOM property hooks, frame neutralizers, and location hijack blocks
  */
 function injectClientHooks(html, finalTargetUrl, proxyHost) {
   const targetObj = new URL(finalTargetUrl);
@@ -201,10 +279,10 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         return l.includes('challenges.cloudflare.com') || l.includes('recaptcha') || l.includes('hcaptcha') || l.includes('turnstile');
       }
 
-      // 1. Break frame-busters
+      // 1. Break frame-busters and self-checks
       try {
-        Object.defineProperty(window, 'top', { get: function() { return window.self; } });
-        Object.defineProperty(window, 'parent', { get: function() { return window.self; } });
+        Object.defineProperty(window, 'top', { get: () => window.self });
+        Object.defineProperty(window, 'parent', { get: () => window.self });
       } catch(e) {}
 
       // 2. Wrap arbitrary URLs
@@ -231,7 +309,19 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         return PROXY_BASE + encodeURIComponent(absolute);
       }
 
-      // 3. Intercept Click Navigation
+      // 3. Hijack location.replace and location.assign to stop escapes to the real site
+      try {
+        const origReplace = window.location.replace.bind(window.location);
+        window.location.replace = function(u) {
+          origReplace(proxyWrap(u));
+        };
+        const origAssign = window.location.assign.bind(window.location);
+        window.location.assign = function(u) {
+          origAssign(proxyWrap(u));
+        };
+      } catch(e) {}
+
+      // 4. Intercept Click Navigation
       document.addEventListener('click', function(e) {
         let el = e.target;
         while (el && el.tagName !== 'A') {
@@ -246,7 +336,7 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         }
       }, true);
 
-      // 4. Intercept Form Submissions
+      // 5. Intercept Form Submissions
       document.addEventListener('submit', function(e) {
         if (e.target && e.target.action) {
           const action = e.target.getAttribute('action') || e.target.action;
@@ -256,7 +346,7 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
         }
       }, true);
 
-      // 5. Intercept Fetch & XHR
+      // 6. Intercept Fetch & XHR
       const origFetch = window.fetch;
       window.fetch = function(input, init) {
         let u = (typeof input === 'string') ? input : (input instanceof Request ? input.url : '');
@@ -281,12 +371,12 @@ function injectClientHooks(html, finalTargetUrl, proxyHost) {
   </script>
   `;
 
-  // Floating Navigation Bar for Direct Full-Window Mode
   const floatingToolbar = `
   <div id="__proxy_floating_bar" style="position:fixed;bottom:20px;right:20px;z-index:2147483647;display:flex;align-items:center;gap:8px;background:rgba(15,23,42,0.92);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.15);padding:8px 14px;border-radius:9999px;box-shadow:0 10px 25px rgba(0,0,0,0.6);font-family:sans-serif;font-size:12px;color:#fff;">
     <button onclick="window.history.back()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">◀</button>
     <button onclick="window.history.forward()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">▶</button>
     <button onclick="window.location.reload()" style="background:#334155;color:#fff;border:none;padding:4px 8px;border-radius:6px;cursor:pointer;font-weight:bold;">↻</button>
+    <a href="/?mode=stream&url=${encodeURIComponent(finalTargetUrl)}" style="background:#8b5cf6;color:#fff;text-decoration:none;padding:4px 10px;border-radius:6px;font-weight:bold;">🎬 Stream Player</a>
     <a href="/" style="background:#e11d48;color:#fff;text-decoration:none;padding:4px 10px;border-radius:6px;font-weight:bold;">⚡ Exit</a>
   </div>
   `;
@@ -354,7 +444,7 @@ module.exports = async (req, res) => {
     const finalOrigin = new URL(finalTargetUrl).origin;
     const contentType = response.headers.get('content-type') || '';
 
-    // Strip restrictive headers
+    // Strip problematic headers
     const blockedHeaders = [
       'content-length',
       'content-encoding',
@@ -388,6 +478,18 @@ module.exports = async (req, res) => {
       res.setHeader('Set-Cookie', `__proxy_target=${encodeURIComponent(finalOrigin)}; Path=/; SameSite=Lax`);
 
       let bodyText = await response.text();
+
+      // Check if user requested direct Cinema Stream Player mode
+      const isStreamMode = req.query && (req.query.mode === 'stream' || req.query.action === 'extract');
+      if (isStreamMode) {
+        const videos = extractVideoMedia(bodyText, finalOrigin);
+        if (videos.length > 0) {
+          const cinemaHtml = renderCinemaPlayer(videos[0], finalTargetUrl, proxyHost);
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          return res.status(200).send(cinemaHtml);
+        }
+      }
+
       bodyText = rewriteHtml(bodyText, finalOrigin, proxyHost);
       bodyText = injectClientHooks(bodyText, finalTargetUrl, proxyHost);
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -400,7 +502,7 @@ module.exports = async (req, res) => {
       res.setHeader('Content-Type', 'text/css; charset=utf-8');
       return res.status(response.status).send(cssText);
     } 
-    // Handle Images, Media, Streams
+    // Handle Video streams, Audio, Images
     else {
       res.status(response.status);
       if (response.body && typeof response.body.pipe === 'function') {

@@ -296,7 +296,8 @@
         <div class="option-item">
           <label for="browse-mode">Launch Mode:</label>
           <select id="browse-mode">
-            <option value="direct">Direct Top-Window (Best for Pornhub & Captchas)</option>
+            <option value="direct">Direct Top-Window (Full Site)</option>
+            <option value="stream">🎬 Direct Cinema Stream (Zero Ads / Direct Video)</option>
             <option value="modal">Embedded Modal</option>
           </select>
         </div>
@@ -416,6 +417,10 @@
       }
 
       const browseMode = document.getElementById('browse-mode');
+      if (browseMode && browseMode.value === 'stream') {
+        window.location.href = proxyUrl + '&mode=stream';
+        return;
+      }
       if (browseMode && browseMode.value === 'direct') {
         window.location.href = proxyUrl;
         return;
