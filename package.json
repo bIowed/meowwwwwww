@@ -1,0 +1,13 @@
+{
+  "name": "vercel-web-proxy",
+  "version": "1.0.0",
+  "description": "Vercel serverless web proxy with URL rewriting and preloaded quick-links",
+  "main": "api/proxy.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "node api/proxy.js"
+  },
+  "dependencies": {
+    "node-fetch": "^2.7.0"
+  }
+}
