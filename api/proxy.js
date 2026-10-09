@@ -1,13 +1,13 @@
 // language: JavaScript, file: api/proxy.js, runtime: Node.js (Vercel Serverless), target: Vercel (sfo1/fra1)
 const fetch = globalThis.fetch || require('node-fetch');
 const { URL } = require('url');
-const HlsRewriter = require('../lib/hls_rewriter');
-const CookieJar = require('../lib/cookie_jar');
-const VideoExtractor = require('../lib/extractor');
-const DomSandbox = require('../lib/dom_sandbox');
-const EvasionEngine = require('../lib/evasion');
-const { AstRewriter } = require('../lib/ast_parser');
-const MediaEngine = require('../lib/media_engine');
+const HlsRewriter = require('./lib/hls_rewriter');
+const CookieJar = require('./lib/cookie_jar');
+const VideoExtractor = require('./lib/extractor');
+const DomSandbox = require('./lib/dom_sandbox');
+const EvasionEngine = require('./lib/evasion');
+const { AstRewriter } = require('./lib/ast_parser');
+const MediaEngine = require('./lib/media_engine');
 
 function extractTargetUrl(req) {
   const fullUrl = req.url || '';
