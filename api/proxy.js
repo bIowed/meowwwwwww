@@ -3,12 +3,12 @@ const fetch = require('node-fetch');
 const { URL } = require('url');
 
 /**
- * Parses target URL supporting raw query strings and Base64 encoded URLs
+ * Parses target URL supporting raw query strings, Base64 encoding, and fallback paths
  */
 function extractTargetUrl(req) {
   const fullUrl = req.url || '';
-  
-  // Base64 URL support (?b64url=...)
+
+  // 1. Check for Base64 encoded URL (?b64url=...)
   const b64Match = fullUrl.match(/[?&]b64url=([^&]+)/);
   if (b64Match && b64Match[1]) {
     try {
@@ -16,7 +16,7 @@ function extractTargetUrl(req) {
     } catch (e) {}
   }
 
-  // Standard raw url parameter
+  // 2. Check for explicit target URL (?url=...)
   const match = fullUrl.match(/[?&]url=([^&]+.*)/);
   if (match && match[1]) {
     try {
@@ -25,7 +25,26 @@ function extractTargetUrl(req) {
       return match[1];
     }
   }
-  return req.query.url || '';
+
+  if (req.query.url) {
+    return req.query.url;
+  }
+
+  // 3. Fallback path handling (e.g. /search/3d+porn hit directly on domain)
+  const referer = req.headers.referer || '';
+  if (referer.includes('url=')) {
+    const refMatch = referer.match(/url=([^&]+)/);
+    if (refMatch && refMatch[1]) {
+      try {
+        const parentTarget = decodeURIComponent(refMatch[1]);
+        const parentObj = new URL(parentTarget);
+        const cleanPath = req.query.fallback_path || fullUrl;
+        return new URL(cleanPath, parentObj.origin).toString();
+      } catch (e) {}
+    }
+  }
+
+  return '';
 }
 
 function resolveUrl(relativeOrAbsolute, baseOrigin) {
@@ -40,7 +59,7 @@ function resolveUrl(relativeOrAbsolute, baseOrigin) {
 }
 
 /**
- * Injects stealth browser overrides, fingerprint masking, and client-side proxy hooks
+ * Injects frame-buster neutralizer, form submission hooks, and DOM click interceptors
  */
 function injectStealthEngine(html, finalTargetUrl, proxyHost) {
   const targetObj = new URL(finalTargetUrl);
@@ -53,7 +72,13 @@ function injectStealthEngine(html, finalTargetUrl, proxyHost) {
       const TARGET_ORIGIN = "${targetObj.origin}";
       const CURRENT_TARGET = "${finalTargetUrl}";
 
-      // Canvas / WebGL Fingerprint Noise Generator
+      // 1. Break Frame-Buster Scripts (Pornhub / Cloudflare window.top checks)
+      try {
+        Object.defineProperty(window, 'top', { get: function() { return window.self; } });
+        Object.defineProperty(window, 'parent', { get: function() { return window.self; } });
+      } catch(e) {}
+
+      // 2. Canvas Fingerprint Masking
       try {
         const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
         CanvasRenderingContext2D.prototype.getImageData = function(x, y, w, h) {
@@ -65,7 +90,6 @@ function injectStealthEngine(html, finalTargetUrl, proxyHost) {
         };
       } catch(e) {}
 
-      // URL Wrapper Utility
       function wrapUrl(url) {
         if (!url || typeof url !== 'string') return url;
         if (url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('javascript:')) return url;
@@ -86,7 +110,33 @@ function injectStealthEngine(html, finalTargetUrl, proxyHost) {
         return PROXY_BASE + encodeURIComponent(absUrl);
       }
 
-      // Hook Fetch
+      // 3. Hook Global Click Navigation
+      document.addEventListener('click', function(e) {
+        let target = e.target;
+        while (target && target.tagName !== 'A') {
+          target = target.parentElement;
+        }
+        if (target && target.href && !target.href.startsWith(PROXY_BASE) && !target.href.startsWith('javascript:')) {
+          e.preventDefault();
+          window.location.href = wrapUrl(target.getAttribute('href') || target.href);
+        }
+      }, true);
+
+      // 4. Hook Form Submissions
+      const origFormSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = function() {
+        if (this.action) {
+          this.action = wrapUrl(this.action);
+        }
+        return origFormSubmit.call(this);
+      };
+      document.addEventListener('submit', function(e) {
+        if (e.target && e.target.action) {
+          e.target.action = wrapUrl(e.target.action);
+        }
+      }, true);
+
+      // 5. Hook Fetch & XHR
       const origFetch = window.fetch;
       window.fetch = function(input, init) {
         if (typeof input === 'string') {
@@ -97,14 +147,12 @@ function injectStealthEngine(html, finalTargetUrl, proxyHost) {
         return origFetch.call(this, input, init);
       };
 
-      // Hook XHR
       const origOpen = XMLHttpRequest.prototype.open;
       XMLHttpRequest.prototype.open = function(method, url, ...args) {
         if (url) url = wrapUrl(url);
         return origOpen.call(this, method, url, ...args);
       };
 
-      // Hook SetAttribute
       const origSetAttribute = Element.prototype.setAttribute;
       Element.prototype.setAttribute = function(name, value) {
         const lower = name.toLowerCase();
@@ -112,13 +160,6 @@ function injectStealthEngine(html, finalTargetUrl, proxyHost) {
           value = wrapUrl(value);
         }
         return origSetAttribute.call(this, name, value);
-      };
-
-      // Hook window.open
-      const origOpenWindow = window.open;
-      window.open = function(url, ...args) {
-        if (url) url = wrapUrl(url);
-        return origOpenWindow.call(this, url, ...args);
       };
     })();
   </script>
@@ -184,7 +225,7 @@ module.exports = async (req, res) => {
 
   let rawTarget = extractTargetUrl(req);
   if (!rawTarget) {
-    return res.status(400).json({ error: 'Missing target URL parameter' });
+    return res.status(400).json({ error: 'Missing or unresolvable target URL parameter' });
   }
 
   if (!rawTarget.startsWith('http://') && !rawTarget.startsWith('https://')) {
@@ -195,7 +236,6 @@ module.exports = async (req, res) => {
     const targetObj = new URL(rawTarget);
     const proxyHost = req.headers.host || 'localhost';
 
-    // User-Agent Spoofing via header or custom preset
     const userAgent = req.headers['x-proxy-ua'] || 
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -226,7 +266,6 @@ module.exports = async (req, res) => {
     const finalTargetUrl = response.url || targetObj.toString();
     const contentType = response.headers.get('content-type') || '';
 
-    // Strip restrictive headers
     response.headers.forEach((value, key) => {
       const lowerKey = key.toLowerCase();
       if (![

@@ -7,12 +7,16 @@
       "dest": "/api/proxy.js"
     },
     {
-      "src": "/proxy/(.*)",
-      "dest": "/api/proxy.js?url=$1"
+      "src": "/favicon.ico",
+      "dest": "/public/index.html"
+    },
+    {
+      "src": "/$",
+      "dest": "/public/index.html"
     },
     {
       "src": "/(.*)",
-      "dest": "/public/$1"
+      "dest": "/api/proxy.js?fallback_path=$1"
     }
   ]
 }
